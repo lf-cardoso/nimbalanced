@@ -4,30 +4,27 @@
 #          Christos Aridas
 # License: MIT
 
-from __future__ import division
-
-import warnings
 from abc import ABCMeta, abstractmethod
 
 import numpy as np
 
 from sklearn.base import BaseEstimator
-from sklearn.externals import six
 from sklearn.preprocessing import label_binarize
-from sklearn.utils import check_X_y
+from sklearn.utils.multiclass import check_classification_targets
 
 from .utils import check_sampling_strategy, check_target_type
-from .utils.deprecation import deprecate_parameter
+from .utils._validation import ArraysTransformer
+from .utils._validation import _deprecate_positional_args
 
 
-class SamplerMixin(six.with_metaclass(ABCMeta, BaseEstimator)):
+class SamplerMixin(BaseEstimator, metaclass=ABCMeta):
     """Mixin class for samplers with abstract method.
 
     Warning: This class should not be used directly. Use the derive classes
     instead.
     """
 
-    _estimator_type = 'sampler'
+    _estimator_type = "sampler"
 
     def fit(self, X, y):
         """Check inputs and statistics of the sampler.
@@ -36,22 +33,22 @@ class SamplerMixin(six.with_metaclass(ABCMeta, BaseEstimator)):
 
         Parameters
         ----------
-        X : {array-like, sparse matrix}, shape (n_samples, n_features)
+        X : {array-like, dataframe, sparse matrix} of shape \
+                (n_samples, n_features)
             Data array.
 
-        y : array-like, shape (n_samples,)
+        y : array-like of shape (n_samples,)
             Target array.
 
         Returns
         -------
         self : object
             Return the instance itself.
-
         """
-        self._deprecate_ratio()
         X, y, _ = self._check_X_y(X, y)
         self.sampling_strategy_ = check_sampling_strategy(
-            self.sampling_strategy, y, self._sampling_type)
+            self.sampling_strategy, y, self._sampling_type
+        )
         return self
 
     def fit_resample(self, X, y):
@@ -59,37 +56,37 @@ class SamplerMixin(six.with_metaclass(ABCMeta, BaseEstimator)):
 
         Parameters
         ----------
-        X : {array-like, sparse matrix}, shape (n_samples, n_features)
+        X : {array-like, dataframe, sparse matrix} of shape \
+                (n_samples, n_features)
             Matrix containing the data which have to be sampled.
 
-        y : array-like, shape (n_samples,)
+        y : array-like of shape (n_samples,)
             Corresponding label for each sample in X.
 
         Returns
         -------
-        X_resampled : {array-like, sparse matrix}, shape \
-(n_samples_new, n_features)
+        X_resampled : {array-like, dataframe, sparse matrix} of shape \
+                (n_samples_new, n_features)
             The array containing the resampled data.
 
-        y_resampled : array-like, shape (n_samples_new,)
+        y_resampled : array-like of shape (n_samples_new,)
             The corresponding label of `X_resampled`.
-
         """
-        self._deprecate_ratio()
-
+        check_classification_targets(y)
+        arrays_transformer = ArraysTransformer(X, y)
         X, y, binarize_y = self._check_X_y(X, y)
 
         self.sampling_strategy_ = check_sampling_strategy(
-            self.sampling_strategy, y, self._sampling_type)
+            self.sampling_strategy, y, self._sampling_type
+        )
 
         output = self._fit_resample(X, y)
 
-        if binarize_y:
-            y_sampled = label_binarize(output[1], np.unique(y))
-            if len(output) == 2:
-                return output[0], y_sampled
-            return output[0], y_sampled, output[2]
-        return output
+        y_ = (label_binarize(output[1], np.unique(y))
+              if binarize_y else output[1])
+
+        X_, y_ = arrays_transformer.transform(output[0], y_)
+        return (X_, y_) if len(output) == 2 else (X_, y_, output[2])
 
     #  define an alias for back-compatibility
     fit_sample = fit_resample
@@ -101,20 +98,20 @@ class SamplerMixin(six.with_metaclass(ABCMeta, BaseEstimator)):
 
         Parameters
         ----------
-        X : {array-like, sparse matrix}, shape (n_samples, n_features)
+        X : {array-like, sparse matrix} of shape (n_samples, n_features)
             Matrix containing the data which have to be sampled.
 
-        y : array-like, shape (n_samples,)
+        y : array-like of shape (n_samples,)
             Corresponding label for each sample in X.
 
         Returns
         -------
-        X_resampled : {ndarray, sparse matrix}, shape \
-(n_samples_new, n_features)
+        X_resampled : {ndarray, sparse matrix} of shape \
+                (n_samples_new, n_features)
             The array containing the resampled data.
 
-        y_resampled : ndarray, shape (n_samples_new,)
-            The corresponding label of `X_resampled`
+        y_resampled : ndarray of shape (n_samples_new,)
+            The corresponding label of `X_resampled`.
 
         """
         pass
@@ -127,30 +124,17 @@ class BaseSampler(SamplerMixin):
     instead.
     """
 
-    def __init__(self, sampling_strategy='auto', ratio=None):
+    def __init__(self, sampling_strategy="auto"):
         self.sampling_strategy = sampling_strategy
-        # FIXME: remove in 0.6
-        self.ratio = ratio
 
-    @staticmethod
-    def _check_X_y(X, y):
+    def _check_X_y(self, X, y, accept_sparse=None):
+        if accept_sparse is None:
+            accept_sparse = ["csr", "csc"]
         y, binarize_y = check_target_type(y, indicate_one_vs_all=True)
-        X, y = check_X_y(X, y, accept_sparse=['csr', 'csc'])
+        X, y = self._validate_data(
+            X, y, reset=True, accept_sparse=accept_sparse
+        )
         return X, y, binarize_y
-
-    @property
-    def ratio_(self):
-        # FIXME: remove in 0.6
-        warnings.warn("'ratio' and 'ratio_' are deprecated. Use "
-                      "'sampling_strategy' and 'sampling_strategy_' instead.",
-                      DeprecationWarning)
-        return self.sampling_strategy_
-
-    def _deprecate_ratio(self):
-        # both ratio and sampling_strategy should not be set
-        if self.ratio is not None:
-            deprecate_parameter(self, '0.4', 'ratio', 'sampling_strategy')
-            self.sampling_strategy = self.ratio
 
 
 def _identity(X, y):
@@ -164,21 +148,30 @@ class FunctionSampler(BaseSampler):
 
     Parameters
     ----------
-    func : callable or None,
+    func : callable, default=None
         The callable to use for the transformation. This will be passed the
         same arguments as transform, with args and kwargs forwarded. If func is
         None, then func will be the identity function.
 
-    accept_sparse : bool, optional (default=True)
+    accept_sparse : bool, default=True
         Whether sparse input are supported. By default, sparse inputs are
         supported.
 
-    kw_args : dict, optional (default=None)
+    kw_args : dict, default=None
         The keyword argument expected by ``func``.
+
+    validate : bool, default=True
+        Whether or not to bypass the validation of ``X`` and ``y``. Turning-off
+        validation allows to use the ``FunctionSampler`` with any type of
+        data.
+
+    See Also
+    --------
+
+    sklearn.preprocessing.FunctionTransfomer : Stateless transformer.
 
     Notes
     -----
-
     See
     :ref:`sphx_glr_auto_examples_plot_outlier_rejections.py`
 
@@ -217,20 +210,63 @@ class FunctionSampler(BaseSampler):
     >>> print('Resampled dataset shape {}'.format(
     ...     sorted(Counter(y_res).items())))
     Resampled dataset shape [(0, 100), (1, 100)]
-
     """
 
-    _sampling_type = 'bypass'
+    _sampling_type = "bypass"
 
-    def __init__(self, func=None, accept_sparse=True, kw_args=None):
-        super(FunctionSampler, self).__init__()
+    @_deprecate_positional_args
+    def __init__(self, *, func=None, accept_sparse=True, kw_args=None,
+                 validate=True):
+        super().__init__()
         self.func = func
         self.accept_sparse = accept_sparse
         self.kw_args = kw_args
+        self.validate = validate
+
+    def fit_resample(self, X, y):
+        """Resample the dataset.
+
+        Parameters
+        ----------
+        X : {array-like, sparse matrix} of shape (n_samples, n_features)
+            Matrix containing the data which have to be sampled.
+
+        y : array-like of shape (n_samples,)
+            Corresponding label for each sample in X.
+
+        Returns
+        -------
+        X_resampled : {array-like, sparse matrix} of shape \
+                (n_samples_new, n_features)
+            The array containing the resampled data.
+
+        y_resampled : array-like of shape (n_samples_new,)
+            The corresponding label of `X_resampled`.
+        """
+        arrays_transformer = ArraysTransformer(X, y)
+
+        if self.validate:
+            check_classification_targets(y)
+            X, y, binarize_y = self._check_X_y(
+                X, y, accept_sparse=self.accept_sparse
+            )
+
+        self.sampling_strategy_ = check_sampling_strategy(
+            self.sampling_strategy, y, self._sampling_type
+        )
+
+        output = self._fit_resample(X, y)
+
+        if self.validate:
+
+            y_ = (label_binarize(output[1], np.unique(y))
+                  if binarize_y else output[1])
+            X_, y_ = arrays_transformer.transform(output[0], y_)
+            return (X_, y_) if len(output) == 2 else (X_, y_, output[2])
+
+        return output
 
     def _fit_resample(self, X, y):
-        X, y = check_X_y(X, y, accept_sparse=['csr', 'csc']
-                         if self.accept_sparse else False)
         func = _identity if self.func is None else self.func
         output = func(X, y, **(self.kw_args if self.kw_args else {}))
         return output
